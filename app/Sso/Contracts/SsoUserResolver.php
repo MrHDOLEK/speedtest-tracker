@@ -7,5 +7,5 @@ use Laravel\Socialite\Contracts\User as SocialiteUser;
 
 interface SsoUserResolver
 {
-    public function resolve(string $provider, SocialiteUser $ssoUser): ?User;
+    public function resolve(SocialiteUser $ssoUser): ?User;
 }

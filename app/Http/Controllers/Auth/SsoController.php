@@ -23,26 +23,23 @@ final readonly class SsoController
 
     public function redirect(SsoRedirectRequest $request): RedirectResponse
     {
-        return $this->manager->driver((string) $request->route('provider'))->redirect();
+        return $this->manager->driver()->redirect();
     }
 
     public function callback(SsoCallbackRequest $request): RedirectResponse
     {
-        $provider = (string) $request->route('provider');
-
         try {
-            $user = $this->resolver->resolve($provider, $this->manager->driver($provider)->user());
+            $user = $this->resolver->resolve($this->manager->driver()->user());
         } catch (\Throwable $exception) {
             $this->logger->warning('SSO authentication failed.', [
-                'provider' => $provider,
                 'message' => $exception->getMessage(),
             ]);
 
-            return $this->failed(__('settings/sso.callback_failed'));
+            return $this->failed(__('auth.sso.failed'));
         }
 
         if ($user === null) {
-            return $this->failed(__('settings/sso.not_provisioned'));
+            return $this->failed(__('auth.sso.not_provisioned'));
         }
 
         $this->auth->guard('web')->login($user, remember: true);

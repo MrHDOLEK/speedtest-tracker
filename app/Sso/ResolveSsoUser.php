@@ -4,22 +4,21 @@ namespace App\Sso;
 
 use App\Enums\UserRole;
 use App\Models\User;
-use App\Settings\SsoSettings;
 use App\Sso\Contracts\SsoUserResolver;
 use Laravel\Socialite\Contracts\User as SocialiteUser;
 
 final class ResolveSsoUser implements SsoUserResolver
 {
     public function __construct(
-        private readonly SsoSettings $settings,
+        private readonly SsoManager $manager,
     ) {}
 
-    public function resolve(string $provider, SocialiteUser $ssoUser): ?User
+    public function resolve(SocialiteUser $ssoUser): ?User
     {
-        $identity = SsoIdentity::fromSocialite($provider, $ssoUser, $this->settings->groups_claim);
+        $identity = SsoIdentity::fromSocialite($ssoUser, $this->manager->groupsClaim());
 
         $user = User::query()
-            ->where('sso_provider', $identity->provider)
+            ->where('sso_provider', SsoManager::DRIVER)
             ->where('sso_id', $identity->id)
             ->first();
 
@@ -32,33 +31,33 @@ final class ResolveSsoUser implements SsoUserResolver
             : null;
 
         if ($localUser !== null) {
-            if ($this->settings->allow_linking_by_email && $identity->emailVerified) {
-                $localUser->sso_provider = $identity->provider;
-                $localUser->sso_id = $identity->id;
-
-                return $this->sync($localUser, $identity);
+            if (! $identity->emailVerified) {
+                return null;
             }
 
+            $localUser->sso_provider = SsoManager::DRIVER;
+            $localUser->sso_id = $identity->id;
+
+            return $this->sync($localUser, $identity);
+        }
+
+        if (! $this->manager->autoProvision() || blank($identity->email)) {
             return null;
         }
 
-        if ($this->settings->auto_create_users && filled($identity->email)) {
-            $user = new User([
-                'name' => $identity->name ?: $identity->email,
-                'email' => $identity->email,
-                'sso_provider' => $identity->provider,
-                'sso_id' => $identity->id,
-            ]);
+        $user = new User([
+            'name' => $identity->name ?: $identity->email,
+            'email' => $identity->email,
+            'sso_provider' => SsoManager::DRIVER,
+            'sso_id' => $identity->id,
+        ]);
 
-            $user->password = bin2hex(random_bytes(32));
-            $user->email_verified_at = $identity->emailVerified ? now() : null;
-            $user->role = $this->resolveRole($identity);
-            $user->save();
+        $user->password = bin2hex(random_bytes(32));
+        $user->email_verified_at = $identity->emailVerified ? now() : null;
+        $user->role = $this->resolveRole($identity);
+        $user->save();
 
-            return $user;
-        }
-
-        return null;
+        return $user;
     }
 
     private function sync(User $user, SsoIdentity $identity): User
@@ -71,7 +70,7 @@ final class ResolveSsoUser implements SsoUserResolver
             $user->email = $identity->email;
         }
 
-        if ($this->settings->role_mapping_enabled) {
+        if ($this->manager->mapsGroupsToRoles()) {
             $user->role = $this->resolveRole($identity);
         }
 
@@ -82,11 +81,11 @@ final class ResolveSsoUser implements SsoUserResolver
 
     private function resolveRole(SsoIdentity $identity): UserRole
     {
-        if (! $this->settings->role_mapping_enabled) {
-            return UserRole::tryFrom($this->settings->default_role) ?? UserRole::User;
+        if (! $this->manager->mapsGroupsToRoles()) {
+            return $this->manager->defaultRole();
         }
 
-        return $identity->isInAnyGroup($this->settings->admin_groups)
+        return $identity->isInAnyGroup($this->manager->adminGroups())
             ? UserRole::Admin
             : UserRole::User;
     }

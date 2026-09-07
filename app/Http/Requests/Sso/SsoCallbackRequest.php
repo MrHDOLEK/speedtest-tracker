@@ -17,7 +17,7 @@ class SsoCallbackRequest extends FormRequest
 
     public function authorize(): bool
     {
-        return $this->manager->enabled() && $this->manager->knows((string) $this->route('provider'));
+        return $this->manager->enabled();
     }
 
     protected function failedAuthorization(): void

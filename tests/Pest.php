@@ -15,12 +15,19 @@ pest()->extend(Tests\Feature\FeatureTestCase::class)
     ->use(Illuminate\Foundation\Testing\RefreshDatabase::class)
     ->beforeEach(function () {
         config([
-            'sso.enabled' => null,
-            'sso.provider' => null,
-            'sso.override.client_id' => null,
-            'sso.override.client_secret' => null,
-            'sso.override.base_url' => null,
-            'sso.override.scopes' => null,
+            'services.openidconnect' => [
+                'enabled' => false,
+                'base_url' => null,
+                'client_id' => null,
+                'client_secret' => null,
+                'redirect' => null,
+                'scopes' => ['openid', 'email', 'profile'],
+                'button_label' => null,
+                'auto_provision' => false,
+                'groups_claim' => 'groups',
+                'admin_groups' => null,
+                'default_role' => 'user',
+            ],
         ]);
     })
     ->in('Feature');

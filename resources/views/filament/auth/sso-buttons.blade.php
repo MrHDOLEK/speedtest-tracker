@@ -1,26 +1,24 @@
 @php
-    $ssoProviders = app(\App\Sso\SsoManager::class)->enabledProviders();
+    $sso = app(\App\Sso\SsoManager::class);
 @endphp
 
-@if (filled($ssoProviders))
+@if ($sso->enabled())
     <div class="flex flex-col gap-y-4">
         <div class="flex items-center gap-x-3 text-sm text-gray-400 dark:text-gray-500">
             <span class="h-px flex-1 bg-gray-200 dark:bg-white/10"></span>
-            <span>{{ __('settings/sso.or') }}</span>
+            <span>{{ __('auth.sso.or') }}</span>
             <span class="h-px flex-1 bg-gray-200 dark:bg-white/10"></span>
         </div>
 
-        @foreach ($ssoProviders as $providerKey => $provider)
-            <x-filament::button
-                tag="a"
-                href="{{ route('sso.redirect', $providerKey) }}"
-                color="gray"
-                size="lg"
-                :icon="$provider['icon']"
-                class="w-full justify-center"
-            >
-                {{ $provider['label'] }}
-            </x-filament::button>
-        @endforeach
+        <x-filament::button
+            tag="a"
+            href="{{ route('sso.redirect') }}"
+            color="gray"
+            size="lg"
+            icon="tabler-shield-lock"
+            class="w-full justify-center"
+        >
+            {{ $sso->buttonLabel() }}
+        </x-filament::button>
     </div>
 @endif

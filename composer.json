@@ -30,7 +30,7 @@
         "maennchen/zipstream-php": "^2.4",
         "promphp/prometheus_client_php": "^2.15.1",
         "secondnetwork/blade-tabler-icons": "^3.46.0",
-        "socialiteproviders/authentik": "^5.3.0",
+        "socialiteproviders/openidconnect": "^1.0",
         "spatie/laravel-json-api-paginate": "^2.0.2",
         "spatie/laravel-query-builder": "^6.4.4",
         "spatie/laravel-settings": "^3.9.0",

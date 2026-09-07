@@ -2,127 +2,106 @@
 
 namespace App\Sso;
 
-use App\Settings\SsoSettings;
+use App\Enums\UserRole;
+use Illuminate\Contracts\Config\Repository as Config;
 use Laravel\Socialite\Contracts\Factory as Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
 
-class SsoManager
+final class SsoManager
 {
+    public const DRIVER = 'openidconnect';
+
+    private const CONFIG = 'services.'.self::DRIVER;
+
     public function __construct(
         private readonly Socialite $socialite,
-        private readonly SsoSettings $settings,
+        private readonly Config $config,
     ) {}
 
     public function enabled(): bool
     {
-        $override = config('sso.enabled');
-
-        if ($override !== null) {
-            return filter_var($override, FILTER_VALIDATE_BOOLEAN);
-        }
-
-        return (bool) $this->settings->enabled;
+        return $this->flag('enabled')
+            && $this->text('base_url') !== null
+            && $this->text('client_id') !== null
+            && $this->text('client_secret') !== null;
     }
 
-    public function activeProvider(): ?string
+    public function driver(): AbstractProvider
     {
-        return config('sso.provider') ?: ($this->settings->provider ?: null);
+        $this->config->set(self::CONFIG.'.redirect', $this->redirectUri());
+
+        /** @var AbstractProvider $provider */
+        $provider = $this->socialite->driver(self::DRIVER);
+
+        return $provider;
     }
 
-    public function knows(string $provider): bool
+    public function redirectUri(): string
     {
-        return $provider === $this->activeProvider()
-            && array_key_exists($provider, (array) config('sso.providers'));
+        return $this->text('redirect') ?? route('sso.callback');
     }
 
-    /**
-     * @return array<string, array{label: string, icon: ?string}>
-     */
-    public function enabledProviders(): array
+    public function buttonLabel(): string
     {
-        if (! $this->enabled()) {
-            return [];
-        }
-
-        $key = $this->activeProvider();
-
-        if (! $key || ! config("sso.providers.{$key}")) {
-            return [];
-        }
-
-        return [
-            $key => [
-                'label' => $this->buttonLabel($key),
-                'icon' => config("sso.providers.{$key}.icon"),
-            ],
-        ];
+        return $this->text('button_label') ?? __('auth.sso.sign_in');
     }
 
-    public function driver(string $provider): AbstractProvider
+    public function autoProvision(): bool
     {
-        $driver = $this->driverName($provider);
-
-        config([
-            "services.{$driver}" => [
-                'client_id' => $this->clientId(),
-                'client_secret' => $this->clientSecret(),
-                'base_url' => $this->baseUrl(),
-                'redirect' => route('sso.callback', $provider),
-            ],
-        ]);
-
-        /** @var AbstractProvider $socialite */
-        $socialite = $this->socialite->driver($driver);
-
-        return $socialite->setScopes($this->scopes($provider));
+        return $this->flag('auto_provision');
     }
 
-    public function buttonLabel(string $provider): string
+    public function groupsClaim(): string
     {
-        if (filled($this->settings->button_label)) {
-            return $this->settings->button_label;
-        }
-
-        $label = config("sso.providers.{$provider}.label", $provider);
-
-        return __('settings/sso.sign_in_with', ['provider' => $label]);
+        return $this->text('groups_claim') ?? 'groups';
     }
 
-    public function clientId(): ?string
+    public function mapsGroupsToRoles(): bool
     {
-        return config('sso.override.client_id') ?: $this->settings->client_id;
-    }
-
-    public function clientSecret(): ?string
-    {
-        return config('sso.override.client_secret') ?: $this->settings->client_secret;
-    }
-
-    public function baseUrl(): ?string
-    {
-        return config('sso.override.base_url') ?: $this->settings->base_url;
+        return $this->adminGroups() !== [];
     }
 
     /**
-     * @return array<int, string>
+     * @return list<string>
      */
-    public function scopes(string $provider): array
+    public function adminGroups(): array
     {
-        $override = config('sso.override.scopes');
+        $groups = $this->config->get(self::CONFIG.'.admin_groups');
 
-        if (filled($override)) {
-            return array_values(array_filter(array_map('trim', explode(',', $override))));
+        if (is_string($groups)) {
+            $groups = explode(',', $groups);
         }
 
-        if (filled($this->settings->scopes)) {
-            return $this->settings->scopes;
+        if (! is_array($groups)) {
+            return [];
         }
 
-        return config("sso.providers.{$provider}.scopes", ['openid', 'profile', 'email']);
+        $names = array_map(
+            static fn (mixed $group): string => is_string($group) ? trim($group) : '',
+            $groups,
+        );
+
+        return array_values(array_filter($names, static fn (string $name): bool => $name !== ''));
     }
 
-    private function driverName(string $provider): string
+    public function defaultRole(): UserRole
     {
-        return config("sso.providers.{$provider}.driver", $provider);
+        return UserRole::tryFrom($this->text('default_role') ?? '') ?? UserRole::User;
+    }
+
+    private function text(string $key): ?string
+    {
+        $value = $this->config->get(self::CONFIG.'.'.$key);
+
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        return trim($value);
+    }
+
+    private function flag(string $key): bool
+    {
+        return filter_var($this->config->get(self::CONFIG.'.'.$key), FILTER_VALIDATE_BOOLEAN);
     }
 }

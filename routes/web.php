@@ -34,10 +34,10 @@ Route::redirect('/login', '/admin/login')
 Route::prefix('auth/sso')
     ->name('sso.')
     ->group(function () {
-        Route::get('{provider}/redirect', [SsoController::class, 'redirect'])
+        Route::get('redirect', [SsoController::class, 'redirect'])
             ->name('redirect');
 
-        Route::get('{provider}/callback', [SsoController::class, 'callback'])
+        Route::get('callback', [SsoController::class, 'callback'])
             ->name('callback');
     });
 

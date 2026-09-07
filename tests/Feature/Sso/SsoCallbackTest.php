@@ -2,7 +2,6 @@
 
 use App\Enums\UserRole;
 use App\Models\User;
-use App\Settings\SsoSettings;
 use Laravel\Socialite\Facades\Socialite;
 use Laravel\Socialite\Two\AbstractProvider;
 use Laravel\Socialite\Two\InvalidStateException;
@@ -17,27 +16,21 @@ beforeEach(function () {
 
 function bootSso(array $overrides = []): void
 {
-    $settings = app(SsoSettings::class);
-    $settings->enabled = true;
-    $settings->provider = 'authentik';
-    $settings->base_url = 'https://authentik.test';
-    $settings->client_id = 'my-client';
-    $settings->client_secret = 'my-secret';
-    $settings->auto_create_users = $overrides['auto_create_users'] ?? true;
-    $settings->allow_linking_by_email = $overrides['allow_linking_by_email'] ?? true;
-    $settings->default_role = $overrides['default_role'] ?? 'user';
-    $settings->role_mapping_enabled = $overrides['role_mapping_enabled'] ?? false;
-    $settings->groups_claim = $overrides['groups_claim'] ?? 'groups';
-    $settings->admin_groups = $overrides['admin_groups'] ?? [];
-    $settings->save();
+    config(['services.openidconnect' => array_merge((array) config('services.openidconnect'), [
+        'enabled' => true,
+        'base_url' => 'https://id.test',
+        'client_id' => 'my-client',
+        'client_secret' => 'my-secret',
+        'auto_provision' => true,
+    ], $overrides)]);
 }
 
 function ssoCallback(): string
 {
-    return route('sso.callback', ['provider' => 'authentik', 'code' => 'test-code', 'state' => 'test-state']);
+    return route('sso.callback', ['code' => 'test-code', 'state' => 'test-state']);
 }
 
-function fakeAuthentikUser(array $raw): void
+function fakeSsoUser(array $raw): void
 {
     $socialiteUser = (new SocialiteUser)
         ->setRaw($raw)
@@ -48,7 +41,6 @@ function fakeAuthentikUser(array $raw): void
         ]);
 
     $provider = Mockery::mock(AbstractProvider::class);
-    $provider->shouldReceive('setScopes')->andReturnSelf();
     $provider->shouldReceive('user')->andReturn($socialiteUser);
 
     Socialite::shouldReceive('driver')->andReturn($provider);
@@ -57,7 +49,7 @@ function fakeAuthentikUser(array $raw): void
 it('creates and authenticates a new user on a verified email', function () {
     bootSso();
 
-    fakeAuthentikUser([
+    fakeSsoUser([
         'sub' => 'sub-1',
         'email' => 'jane@example.com',
         'email_verified' => true,
@@ -71,21 +63,39 @@ it('creates and authenticates a new user on a verified email', function () {
     assertDatabaseHas('users', [
         'email' => 'jane@example.com',
         'name' => 'Jane Doe',
-        'sso_provider' => 'authentik',
+        'sso_provider' => 'openidconnect',
         'sso_id' => 'sub-1',
         'role' => 'user',
     ]);
 });
 
+it('does not create an account when auto provisioning is off', function () {
+    bootSso(['auto_provision' => false]);
+
+    fakeSsoUser([
+        'sub' => 'sub-1',
+        'email' => 'jane@example.com',
+        'email_verified' => true,
+        'name' => 'Jane Doe',
+    ]);
+
+    test()->get(ssoCallback())
+        ->assertRedirect(route('filament.admin.auth.login'));
+
+    test()->assertGuest();
+
+    assertDatabaseCount('users', 0);
+});
+
 it('links an existing local account on a verified email', function () {
-    bootSso();
+    bootSso(['auto_provision' => false]);
 
     $existing = User::factory()->create([
         'email' => 'jane@example.com',
         'role' => UserRole::User,
     ]);
 
-    fakeAuthentikUser([
+    fakeSsoUser([
         'sub' => 'sub-1',
         'email' => 'jane@example.com',
         'email_verified' => true,
@@ -99,7 +109,7 @@ it('links an existing local account on a verified email', function () {
     assertDatabaseCount('users', 1);
     assertDatabaseHas('users', [
         'id' => $existing->id,
-        'sso_provider' => 'authentik',
+        'sso_provider' => 'openidconnect',
         'sso_id' => 'sub-1',
     ]);
 });
@@ -112,7 +122,7 @@ it('does not link or create an account on an unverified email', function () {
         'role' => UserRole::User,
     ]);
 
-    fakeAuthentikUser([
+    fakeSsoUser([
         'sub' => 'sub-1',
         'email' => 'jane@example.com',
         'email_verified' => false,
@@ -136,7 +146,6 @@ it('redirects to login and stays a guest on a state mismatch', function () {
     bootSso();
 
     $provider = Mockery::mock(AbstractProvider::class);
-    $provider->shouldReceive('setScopes')->andReturnSelf();
     $provider->shouldReceive('user')->andThrow(new InvalidStateException);
 
     Socialite::shouldReceive('driver')->andReturn($provider);
@@ -152,19 +161,16 @@ it('redirects to login and stays a guest on a state mismatch', function () {
 it('rejects an inbound callback missing code or state', function () {
     bootSso();
 
-    test()->get(route('sso.callback', 'authentik'))
+    test()->get(route('sso.callback'))
         ->assertRedirect(route('filament.admin.auth.login'));
 
     test()->assertGuest();
 });
 
 it('maps provider groups to the admin role', function () {
-    bootSso([
-        'role_mapping_enabled' => true,
-        'admin_groups' => ['speedtest-admins'],
-    ]);
+    bootSso(['admin_groups' => 'speedtest-admins']);
 
-    fakeAuthentikUser([
+    fakeSsoUser([
         'sub' => 'sub-9',
         'email' => 'boss@example.com',
         'email_verified' => true,
@@ -177,6 +183,75 @@ it('maps provider groups to the admin role', function () {
     assertDatabaseHas('users', [
         'email' => 'boss@example.com',
         'sso_id' => 'sub-9',
+        'role' => 'admin',
+    ]);
+});
+
+it('demotes a linked user that left the admin groups', function () {
+    bootSso(['admin_groups' => 'speedtest-admins']);
+
+    $existing = User::factory()->create([
+        'email' => 'boss@example.com',
+        'role' => UserRole::Admin,
+        'sso_provider' => 'openidconnect',
+        'sso_id' => 'sub-9',
+    ]);
+
+    fakeSsoUser([
+        'sub' => 'sub-9',
+        'email' => 'boss@example.com',
+        'email_verified' => true,
+        'name' => 'Boss',
+        'groups' => ['staff'],
+    ]);
+
+    test()->get(ssoCallback())->assertRedirect('/');
+
+    assertDatabaseHas('users', [
+        'id' => $existing->id,
+        'role' => 'user',
+    ]);
+});
+
+it('keeps the local role when no admin groups are configured', function () {
+    bootSso();
+
+    $existing = User::factory()->create([
+        'email' => 'boss@example.com',
+        'role' => UserRole::Admin,
+        'sso_provider' => 'openidconnect',
+        'sso_id' => 'sub-9',
+    ]);
+
+    fakeSsoUser([
+        'sub' => 'sub-9',
+        'email' => 'boss@example.com',
+        'email_verified' => true,
+        'name' => 'Boss',
+    ]);
+
+    test()->get(ssoCallback())->assertRedirect('/');
+
+    assertDatabaseHas('users', [
+        'id' => $existing->id,
+        'role' => 'admin',
+    ]);
+});
+
+it('uses the configured default role for new users', function () {
+    bootSso(['default_role' => 'admin']);
+
+    fakeSsoUser([
+        'sub' => 'sub-2',
+        'email' => 'first@example.com',
+        'email_verified' => true,
+        'name' => 'First',
+    ]);
+
+    test()->get(ssoCallback())->assertRedirect('/');
+
+    assertDatabaseHas('users', [
+        'email' => 'first@example.com',
         'role' => 'admin',
     ]);
 });
